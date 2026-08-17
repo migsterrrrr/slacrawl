@@ -2771,13 +2771,78 @@ func parseRetentionTimestamp(value string) (float64, bool) {
 	return 0, false
 }
 
+// ActiveThreadRoots returns known thread roots that have recent activity and
+// have not yet been polled at pollBefore. The oldest poll timestamps are
+// returned first so a bounded caller eventually rotates through large active
+// thread sets instead of repeatedly polling the same roots.
+func (s *Store) ActiveThreadRoots(ctx context.Context, workspaceID, sourceName string, channelIDs []string, activeSince, pollBefore string, limit int) ([]ThreadRoot, error) {
+	if len(channelIDs) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(channelIDs)), ",")
+	query := `
+select m.channel_id, m.ts
+from messages m
+left join sync_state p
+  on p.source_name = ?
+ and p.entity_type = 'thread_poll'
+ and p.entity_id = m.workspace_id || '|' || m.channel_id || '|' || m.ts
+where m.workspace_id = ?
+  and m.channel_id in (` + placeholders + `)
+  and (coalesce(m.thread_ts, '') = '' or m.thread_ts = m.ts)
+  and (
+    m.reply_count > 0
+    or exists (
+      select 1 from messages r
+      where r.workspace_id = m.workspace_id
+        and r.channel_id = m.channel_id
+        and r.thread_ts = m.ts
+    )
+  )
+  and (
+    cast(m.ts as real) >= cast(? as real)
+    or cast(coalesce(nullif(m.latest_reply, ''), '0') as real) >= cast(? as real)
+    or exists (
+      select 1 from messages r
+      where r.workspace_id = m.workspace_id
+        and r.channel_id = m.channel_id
+        and r.thread_ts = m.ts
+        and cast(r.ts as real) >= cast(? as real)
+    )
+  )
+  and coalesce(p.value, '') < ?
+order by coalesce(p.value, ''), m.ts desc
+limit ?
+`
+	args := make([]any, 0, len(channelIDs)+7)
+	args = append(args, sourceName, workspaceID)
+	for _, channelID := range channelIDs {
+		args = append(args, channelID)
+	}
+	args = append(args, activeSince, activeSince, activeSince, pollBefore, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var roots []ThreadRoot
+	for rows.Next() {
+		var root ThreadRoot
+		if err := rows.Scan(&root.ChannelID, &root.TS); err != nil {
+			return nil, err
+		}
+		roots = append(roots, root)
+	}
+	return roots, rows.Err()
+}
+
 func (s *Store) ChannelThreadRoots(ctx context.Context, workspaceID, channelID string) ([]ThreadRoot, error) {
 	rows, err := s.db.QueryContext(ctx, `
 select m.channel_id, m.ts
 from messages m
 where m.workspace_id = ?
   and m.channel_id = ?
-  and coalesce(m.thread_ts, '') = ''
+  and (coalesce(m.thread_ts, '') = '' or m.thread_ts = m.ts)
   and (
     m.reply_count > 0
     or exists (

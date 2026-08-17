@@ -68,6 +68,7 @@ Important Slack facts that drive the schema:
 - messages are scoped by `(channel_id, ts)`
 - threads remain message relationships via `thread_ts`
 - historical thread replies for public/private channel threads require a user token
+- incremental user-only sync must revisit recently active known roots because Slack can omit old roots from a channel-history window even when those threads receive new replies
 - live updates should use Socket Mode when enabled
 - desktop-local data is an optional read-only source and must never become a write path
 

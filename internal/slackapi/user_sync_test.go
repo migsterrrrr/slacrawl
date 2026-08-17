@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,6 +65,68 @@ order by channel_id, ts
 	lastSync, err := st.GetSyncState(context.Background(), SourceUser, "workspace", "T123")
 	require.NoError(t, err)
 	require.Equal(t, "2026-08-17T09:30:00Z", lastSync)
+}
+
+func TestSyncUserRefreshesKnownActiveThreadWhenHistoryOmitsOldRoot(t *testing.T) {
+	var historyCalls atomic.Int32
+	var replyCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		values := mustFormValues(r)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/auth.test":
+			w.Header().Set("X-OAuth-Scopes", strings.Join(requiredUserChannelScopes, ","))
+			_, _ = w.Write([]byte(`{"ok":true,"team":"Test Team","team_id":"T123","user":"alice","user_id":"U123"}`))
+		case "/conversations.list":
+			require.Equal(t, "public_channel,private_channel", values.Get("types"))
+			_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"COLD","name":"old-thread","is_channel":true,"is_member":true}],"response_metadata":{"next_cursor":""}}`))
+		case "/users.list":
+			_, _ = w.Write([]byte(`{"ok":true,"members":[],"response_metadata":{"next_cursor":""}}`))
+		case "/conversations.history":
+			if historyCalls.Add(1) == 1 {
+				_, _ = w.Write([]byte(`{"ok":true,"messages":[{"type":"message","user":"U123","text":"old root","ts":"1710000000.000100","reply_count":1,"latest_reply":"1710000001.000200"}],"response_metadata":{"next_cursor":""}}`))
+				return
+			}
+			// Slack can omit an old root from an incremental history window even
+			// while that thread receives new replies.
+			_, _ = w.Write([]byte(`{"ok":true,"messages":[{"type":"message","user":"U123","text":"new top-level message","ts":"1710000100.000300"}],"response_metadata":{"next_cursor":""}}`))
+		case "/conversations.replies":
+			if replyCalls.Add(1) == 1 {
+				_, _ = w.Write([]byte(`{"ok":true,"messages":[
+					{"type":"message","user":"U123","text":"old root","thread_ts":"1710000000.000100","ts":"1710000000.000100","reply_count":1,"latest_reply":"1710000001.000200"},
+					{"type":"message","user":"U456","text":"first reply","thread_ts":"1710000000.000100","ts":"1710000001.000200"}
+				],"response_metadata":{"next_cursor":""}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ok":true,"messages":[
+				{"type":"message","user":"U123","text":"old root","thread_ts":"1710000000.000100","ts":"1710000000.000100","reply_count":2,"latest_reply":"1710000200.000400"},
+				{"type":"message","user":"U456","text":"first reply","thread_ts":"1710000000.000100","ts":"1710000001.000200"},
+				{"type":"message","user":"U456","text":"late reply to old thread","thread_ts":"1710000000.000100","ts":"1710000200.000400"}
+			],"response_metadata":{"next_cursor":""}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	now := time.Date(2024, 3, 10, 0, 0, 0, 0, time.UTC)
+	client := NewWithOptions(config.Tokens{User: "xoxp-user-only"}, server.URL+"/", server.Client()).WithIncludeDMs(false)
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+	client.now = func() time.Time { return now }
+	st := mustStore(t)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	require.NoError(t, client.SyncUser(context.Background(), st, SyncOptions{Concurrency: 1}))
+	now = now.Add(15 * time.Minute)
+	require.NoError(t, client.SyncUser(context.Background(), st, SyncOptions{Concurrency: 1}))
+
+	rows, err := st.QueryReadOnly(context.Background(), `select text, coalesce(thread_ts, '') as thread_ts from messages where channel_id = 'COLD' order by cast(ts as real)`)
+	require.NoError(t, err)
+	require.Len(t, rows, 4)
+	require.Equal(t, "", rows[0]["thread_ts"])
+	require.Equal(t, "late reply to old thread", rows[3]["text"])
+	require.Equal(t, int32(2), historyCalls.Load())
+	require.Equal(t, int32(2), replyCalls.Load())
 }
 
 func TestDoctorSupportsReadOnlyUserTokenWithoutBot(t *testing.T) {

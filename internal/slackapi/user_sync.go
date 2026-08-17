@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,11 @@ var requiredUserDMSScopes = []string{
 	"mpim:history",
 	"mpim:read",
 }
+
+const (
+	activeThreadRefreshLookback = 30 * 24 * time.Hour
+	activeThreadRefreshLimit    = 200
+)
 
 // SyncUser mirrors only conversations the authenticated user has joined. It
 // refuses bot credentials and non-read OAuth scopes so this source cannot join
@@ -80,6 +86,7 @@ func (c *Client) SyncUser(ctx context.Context, st *store.Store, opts SyncOptions
 		return err
 	}
 	channels = selectUserConversations(channels, opts, true)
+	threadChannels := append([]slack.Channel(nil), channels...)
 	threadRepliesSkipped := newThreadSkipTracker()
 	userSource := channelSyncSource{
 		historyClient: c.user,
@@ -105,12 +112,76 @@ func (c *Client) SyncUser(ctx context.Context, st *store.Store, opts SyncOptions
 		if err := c.syncChannelsWithSource(ctx, st, workspaceID, dms, opts, now, true, userSource); err != nil {
 			return err
 		}
+		threadChannels = append(threadChannels, dms...)
 	}
 
+	if err := c.refreshActiveUserThreads(ctx, st, workspaceID, threadChannels, now, threadRepliesSkipped); err != nil {
+		return err
+	}
 	if err := c.setThreadCoverage(ctx, st, workspaceID, opts, true, threadRepliesSkipped); err != nil {
 		return err
 	}
 	return st.SetSyncState(ctx, SourceUser, "workspace", workspaceID, now.Format(time.RFC3339))
+}
+
+// refreshActiveUserThreads revisits recently active known threads even when
+// Slack omits their old root messages from the current history window. Poll
+// state makes the bounded sweep skip roots already refreshed in this run and
+// rotate fairly when a workspace has more active threads than one run's cap.
+func (c *Client) refreshActiveUserThreads(ctx context.Context, st *store.Store, workspaceID string, channels []slack.Channel, now time.Time, skipped *threadSkipTracker) error {
+	channelByID := make(map[string]slack.Channel, len(channels))
+	channelIDs := make([]string, 0, len(channels))
+	for _, channel := range channels {
+		if channel.ID == "" {
+			continue
+		}
+		if _, exists := channelByID[channel.ID]; exists {
+			continue
+		}
+		channelByID[channel.ID] = channel
+		channelIDs = append(channelIDs, channel.ID)
+	}
+	activeSince := strconv.FormatInt(now.Add(-activeThreadRefreshLookback).Unix(), 10)
+	pollBefore := now.Format(time.RFC3339Nano)
+	roots, err := st.ActiveThreadRoots(ctx, workspaceID, SourceUser, channelIDs, activeSince, pollBefore, activeThreadRefreshLimit)
+	if err != nil {
+		return err
+	}
+	for _, root := range roots {
+		channel, ok := channelByID[root.ChannelID]
+		if !ok {
+			continue
+		}
+		threadKey := workspaceID + "|" + root.ChannelID + "|" + root.TS
+		if skipped != nil {
+			if reason, skip := skipped.SkipReason(root.ChannelID, threadSkipScope(channel)); skip {
+				if err := st.SetSyncState(ctx, SourceUser, "thread_skip", threadKey, reason); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if err := c.syncThread(ctx, st, workspaceID, root.ChannelID, root.TS, true, now); err != nil {
+			if isThreadRepliesSkipped(err) {
+				reason := channelSkipReason(err)
+				if skipped != nil {
+					skipped.Record(root.ChannelID, threadSkipScope(channel), reason)
+				}
+				if err := st.SetSyncState(ctx, SourceUser, "thread_skip", threadKey, reason); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		if err := st.SetSyncState(ctx, SourceUser, threadPollEntityType, threadKey, pollBefore); err != nil {
+			return err
+		}
+		if err := st.DeleteSyncState(ctx, SourceUser, "thread_skip", threadKey); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func selectUserConversations(channels []slack.Channel, opts SyncOptions, requireMembership bool) []slack.Channel {

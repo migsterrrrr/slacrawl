@@ -6,6 +6,7 @@
 
 - Added fail-closed `sync --source user` ingestion for joined public/private channels, DMs, MPIMs, users, and threads without a bot identity. User-only sync rejects configured bot credentials, bot authentication, missing OAuth scope metadata, missing required read scopes, and every reported non-read scope; it never joins channels.
 - Extended `doctor` to validate and report user-only authentication and OAuth scope safety when no bot token is configured.
+- Fixed incremental user-only thread coverage by revisiting a bounded, fairly rotated set of recently active known threads even when Slack omits their old root messages from the current channel-history window.
 
 ## v0.8.5 - 2026-08-14
 

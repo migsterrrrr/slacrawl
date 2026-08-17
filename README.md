@@ -54,7 +54,7 @@ To mirror only the conversations visible to your existing Slack user without a b
 slacrawl sync --source user
 ```
 
-User-only sync refuses configured bot credentials and non-read OAuth scopes, includes DMs and MPIMs, and filters public/private channels to `is_member=true`. See [Configuration](docs/configuration.md#user-only-read-only-api-source) for the exact scope and config requirements.
+User-only sync refuses configured bot credentials and non-read OAuth scopes, includes DMs and MPIMs, filters public/private channels to `is_member=true`, and revisits recently active known threads so new replies on old roots survive incremental history windows. See [Configuration](docs/configuration.md#user-only-read-only-api-source) for the exact scope and config requirements.
 
 Already have a Slack export? Import its ZIP or extracted directory instead of syncing from the API:
 

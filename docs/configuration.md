@@ -130,6 +130,7 @@ Use `sync --source user` when you want the visibility of an existing Slack user 
 - filters public and private channels to Slack's `is_member=true`
 - includes IMs and MPIMs when `sync.include_dms` is enabled (the default when a user token exists)
 - uses the user token for channel history, thread replies, users, DMs, and MPIMs
+- revisits up to 200 known threads with activity in the last 30 days per run, rotating oldest polls first, so replies on old roots are not missed when Slack omits those roots from incremental channel history
 - never attempts `conversations.join`; `--auto-join` does not apply
 - does not support Socket Mode `tail`, which remains a bot/app-token feature
 

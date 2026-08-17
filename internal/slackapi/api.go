@@ -30,6 +30,8 @@ const (
 	SourceUser = "api-user"
 	SourceBot  = "api-bot"
 
+	threadPollEntityType = "thread_poll"
+
 	// defaultHTTPTimeout bounds Slack API HTTP when NewWithOptions gets a nil client.
 	defaultHTTPTimeout = 60 * time.Second
 )
@@ -491,6 +493,9 @@ func (c *Client) syncChannelMessagesWithSource(ctx context.Context, st *store.St
 			}
 			return err
 		}
+		if err := st.SetSyncState(ctx, SourceUser, threadPollEntityType, threadKey, now.Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
 		return st.DeleteSyncState(ctx, SourceUser, "thread_skip", threadKey)
 	}
 
@@ -594,6 +599,12 @@ func (c *Client) syncThread(ctx context.Context, st *store.Store, workspaceID st
 			msg := rawMsg.Message
 			if msg.Channel == "" {
 				msg.Channel = channelID
+			}
+			// Slack may represent the root returned by conversations.replies
+			// with thread_ts equal to its own ts. Normalize that self-reference
+			// so root discovery and thread-context queries keep one invariant.
+			if msg.Timestamp == threadTS {
+				msg.ThreadTimestamp = ""
 			}
 			batch.Messages = append(batch.Messages, store.MessageWrite{
 				Message:                toStoreMessage(workspaceID, msg, SourceUser, 1, rawMsg.RawPayload, now),
