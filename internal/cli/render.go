@@ -652,7 +652,7 @@ func renderDoctorBlock(w *strings.Builder, value any) bool {
 		writeCheck(w, "thread coverage", coverage == "full", ternary(coverage == "full", "full historical replies", "partial without user auth"))
 		if truthy(slackAPI["dms_included"]) {
 			missing := shortValue(slackAPI["dms_missing_scope"])
-			if missing == "" {
+			if missing == "-" {
 				writeCheck(w, "dms and mpims", true, "user token covers DMs and MPIMs")
 			} else {
 				writeCheck(w, "dms and mpims", false, "missing scope: "+missing)
@@ -836,7 +836,7 @@ func renderArchiveProfileBlock(w *strings.Builder, profile map[string]any) {
 		if truthy(source["configured"]) {
 			detail = append(detail, "configured")
 		}
-		if last := shortValue(source["last_seen_at"]); last != "" {
+		if last := shortValue(source["last_seen_at"]); last != "-" {
 			detail = append(detail, "last "+last)
 		}
 		if messages := shortValue(source["messages"]); messages != "" && messages != "0" {

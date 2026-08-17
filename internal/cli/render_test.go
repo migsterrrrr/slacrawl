@@ -27,6 +27,48 @@ func TestNormalizeValueHandlesTimePointers(t *testing.T) {
 	require.Nil(t, row["missing"])
 }
 
+func TestRenderDoctorTreatsOmittedDMScopeErrorAsSuccess(t *testing.T) {
+	previous := ansiEnabled
+	ansiEnabled = false
+	defer func() { ansiEnabled = previous }()
+
+	var w strings.Builder
+	require.True(t, renderDoctorBlock(&w, map[string]any{
+		"config_path":   "/etc/slacrawl/config.toml",
+		"database_path": "/var/lib/slacrawl/slacrawl.db",
+		"fts_available": true,
+		"slack_api": map[string]any{
+			"user_configured":     true,
+			"user_auth_available": true,
+			"user_read_only":      true,
+			"user_auth_team":      "Test Team",
+			"user_auth_team_id":   "T123",
+			"thread_coverage":     "full",
+			"dms_included":        true,
+		},
+	}))
+
+	out := w.String()
+	require.Contains(t, out, "user token covers DMs and MPIMs")
+	require.NotContains(t, out, "missing scope: -")
+}
+
+func TestRenderArchiveProfileOmitsMissingLastSeenTime(t *testing.T) {
+	previous := ansiEnabled
+	ansiEnabled = false
+	defer func() { ansiEnabled = previous }()
+
+	var w strings.Builder
+	renderArchiveProfileBlock(&w, map[string]any{
+		"mode": "empty",
+		"sources": []any{
+			map[string]any{"name": "bot", "enabled": true, "configured": true},
+		},
+	})
+
+	require.NotContains(t, w.String(), "last -")
+}
+
 func TestTrimToKeepsValidUTF8(t *testing.T) {
 	// Byte slicing cut multi-byte runes in half, so search and messages output
 	// could emit text that is not valid UTF-8 at all.
