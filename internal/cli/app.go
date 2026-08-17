@@ -490,7 +490,7 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	}
 
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
-	source := fs.String("source", "api", "api|bot|desktop|wiretap|mcp|connector|all|provider:<name>")
+	source := fs.String("source", "api", "api|bot|user|desktop|wiretap|mcp|connector|all|provider:<name>")
 	workspaceID := fs.String("workspace", "", "workspace id")
 	channels := fs.String("channels", "", "comma separated channel ids")
 	excludeChannels := fs.String("exclude-channels", "", "comma separated channel names to skip during sync")
@@ -500,7 +500,7 @@ func (a *App) runSync(ctx context.Context, configPath string, args []string, for
 	limit := fs.Int("limit", 0, "maximum provider messages (validation imports only)")
 	concurrency := fs.Int("concurrency", cfg.Sync.Concurrency, "worker count")
 	withMedia := fs.Bool("with-media", cfg.FileMediaEnabled(), "fetch file media after sync")
-	autoJoin := fs.Bool("auto-join", cfg.Sync.AutoJoinResolved(), "auto-join public channels during sync")
+	autoJoin := fs.Bool("auto-join", cfg.Sync.AutoJoinResolved(), "auto-join public channels during bot sync; user source never joins")
 	if err := a.parseCommandFlags(fs, args); err != nil {
 		return err
 	}

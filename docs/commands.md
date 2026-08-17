@@ -44,6 +44,7 @@ Override the config with the global `--config <path>` flag. Database, cache, and
 ```sh
 slacrawl sync --source bot
 slacrawl sync --source bot --latest-only --with-media
+slacrawl sync --source user
 slacrawl sync --source mcp --workspace T01234567
 slacrawl sync --source wiretap
 ```
@@ -62,7 +63,9 @@ slacrawl tail --repair-every 30m
 slacrawl watch --desktop-every 5m
 ```
 
-`tail` requires an app token. `watch` reads local Slack Desktop state and refreshes every workspace in the signed-in profile unless `--workspace` restricts it.
+`sync --source user` is the bot-free API mode. It requires a user token with the documented read-only scopes, rejects bot credentials and non-read scopes, and includes only public/private channels where Slack reports `is_member=true`, plus the user's DMs and MPIMs. See [Configuration](configuration.md#user-only-read-only-api-source).
+
+`tail` requires bot and app tokens. `watch` reads local Slack Desktop state and refreshes every workspace in the signed-in profile unless `--workspace` restricts it.
 
 ## Browse and query
 
@@ -164,9 +167,17 @@ slacrawl report
 slacrawl search "incident"
 ```
 
+For a bot-free archive using the authenticated user's joined channels and DMs:
+
+```sh
+slacrawl doctor
+slacrawl sync --source user
+slacrawl search "incident"
+```
+
 For a seeded archive that only needs fresh deltas:
 
 ```sh
-slacrawl sync --source bot --latest-only
+slacrawl sync --source user --latest-only
 slacrawl digest --since 7d
 ```

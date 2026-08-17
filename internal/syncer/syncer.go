@@ -20,6 +20,7 @@ type Source string
 
 const (
 	SourceAPI     Source = "api"
+	SourceUser    Source = "user"
 	SourceDesktop Source = "desktop"
 	SourceMCP     Source = "mcp"
 	SourceAll     Source = "all"
@@ -30,6 +31,8 @@ func ParseSource(value string) (Source, error) {
 	switch normalized {
 	case "", string(SourceAPI), "bot":
 		return SourceAPI, nil
+	case string(SourceUser), "user-api":
+		return SourceUser, nil
 	case string(SourceDesktop), "wiretap":
 		return SourceDesktop, nil
 	case string(SourceMCP), "connector":
@@ -40,7 +43,7 @@ func ParseSource(value string) (Source, error) {
 	if name, ok := strings.CutPrefix(normalized, "provider:"); ok && name != "" && !strings.ContainsAny(name, ":/\\\t\r\n ") {
 		return Source("provider:" + name), nil
 	}
-	return "", fmt.Errorf("unsupported source %q: use api, bot, desktop, wiretap, mcp, connector, all, or provider:<name>", value)
+	return "", fmt.Errorf("unsupported source %q: use api, bot, user, desktop, wiretap, mcp, connector, all, or provider:<name>", value)
 }
 
 func ProviderName(source Source) (string, bool) {
@@ -91,6 +94,16 @@ func RunWithTokens(ctx context.Context, cfg config.Config, st *store.Store, opts
 			LatestOnly:      opts.LatestOnly,
 			Concurrency:     opts.Concurrency,
 			AutoJoin:        opts.AutoJoin,
+		})
+	case SourceUser:
+		return summary, apiClient.SyncUser(ctx, st, slackapi.SyncOptions{
+			WorkspaceID:     opts.WorkspaceID,
+			Channels:        opts.Channels,
+			ExcludeChannels: opts.ExcludeChannels,
+			Since:           opts.Since,
+			Full:            opts.Full,
+			LatestOnly:      opts.LatestOnly,
+			Concurrency:     opts.Concurrency,
 		})
 	case SourceDesktop:
 		return syncDesktop(ctx, cfg, st, opts)

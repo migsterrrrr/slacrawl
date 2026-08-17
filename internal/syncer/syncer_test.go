@@ -1,9 +1,14 @@
 package syncer
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/openclaw/slacrawl/internal/config"
+	"github.com/openclaw/slacrawl/internal/store"
 )
 
 func TestParseSourceAliases(t *testing.T) {
@@ -11,6 +16,8 @@ func TestParseSourceAliases(t *testing.T) {
 		"":          SourceAPI,
 		"api":       SourceAPI,
 		"bot":       SourceAPI,
+		"user":      SourceUser,
+		"user-api":  SourceUser,
 		"desktop":   SourceDesktop,
 		"wiretap":   SourceDesktop,
 		"mcp":       SourceMCP,
@@ -42,6 +49,15 @@ func TestParseSourceProvider(t *testing.T) {
 		_, err := ParseSource(input)
 		require.ErrorContains(t, err, "unsupported source")
 	}
+}
+
+func TestRunWithTokensRoutesUserSource(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "slacrawl.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+
+	_, err = RunWithTokens(context.Background(), config.Default(), st, Options{Source: SourceUser}, config.Tokens{})
+	require.ErrorContains(t, err, "SLACK_USER_TOKEN is required for user-only sync")
 }
 
 func TestDesktopOptionsForSourceAllClearsInheritedWorkspace(t *testing.T) {

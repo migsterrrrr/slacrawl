@@ -22,6 +22,7 @@ app_token_env = "SLACK_CLIENT_APP_TOKEN"
 user_token_env = "SLACK_CLIENT_USER_TOKEN"
 
 [slack.bot]
+# Set false for `sync --source user`; that source refuses resolved bot credentials.
 enabled = true
 token_env = "SLACK_BOT_TOKEN"
 
@@ -30,6 +31,8 @@ enabled = true
 token_env = "SLACK_APP_TOKEN"
 
 [slack.user]
+# User-only source requires read-only user scopes: channels/groups/im/mpim
+# read + history, and users:read. It fails closed on any non-read scope.
 enabled = true
 token_env = "SLACK_USER_TOKEN"
 
@@ -71,7 +74,7 @@ repair_every = "30m"
 desktop_refresh_every = "5m"
 full_history = true
 # include_dms = true # requires SLACK_USER_TOKEN with im:history, mpim:history, im:read, mpim:read scopes
-# auto_join = true # auto-join public channels during sync (default: true; set false to only sync already-joined channels)
+# auto_join = true # bot source only; user source never joins and only keeps is_member=true channels
 # exclude_channels = [] # channel names to skip during sync, case-insensitive (default: empty)
 
 [search]

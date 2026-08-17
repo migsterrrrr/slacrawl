@@ -39,17 +39,22 @@ func defaultHTTPClient() *http.Client {
 }
 
 type Diagnostics struct {
-	BotConfigured     bool   `json:"bot_configured"`
-	AppConfigured     bool   `json:"app_configured"`
-	UserConfigured    bool   `json:"user_configured"`
-	ThreadCoverage    string `json:"thread_coverage"`
-	DMsIncluded       bool   `json:"dms_included"`
-	DMsMissingScope   string `json:"dms_missing_scope,omitempty"`
-	BotAuthTeamID     string `json:"bot_auth_team_id,omitempty"`
-	BotAuthTeam       string `json:"bot_auth_team,omitempty"`
-	UserAuthAvailable bool   `json:"user_auth_available"`
-	UserAuthError     string `json:"user_auth_error,omitempty"`
-	AppTailAvailable  bool   `json:"app_tail_available"`
+	BotConfigured     bool     `json:"bot_configured"`
+	AppConfigured     bool     `json:"app_configured"`
+	UserConfigured    bool     `json:"user_configured"`
+	ThreadCoverage    string   `json:"thread_coverage"`
+	DMsIncluded       bool     `json:"dms_included"`
+	DMsMissingScope   string   `json:"dms_missing_scope,omitempty"`
+	BotAuthTeamID     string   `json:"bot_auth_team_id,omitempty"`
+	BotAuthTeam       string   `json:"bot_auth_team,omitempty"`
+	UserAuthTeamID    string   `json:"user_auth_team_id,omitempty"`
+	UserAuthTeam      string   `json:"user_auth_team,omitempty"`
+	UserAuthAvailable bool     `json:"user_auth_available"`
+	UserReadOnly      bool     `json:"user_read_only"`
+	UserScopes        []string `json:"user_scopes,omitempty"`
+	UserScopeError    string   `json:"user_scope_error,omitempty"`
+	UserAuthError     string   `json:"user_auth_error,omitempty"`
+	AppTailAvailable  bool     `json:"app_tail_available"`
 }
 
 type SyncOptions struct {
@@ -140,25 +145,37 @@ func (c *Client) Doctor(ctx context.Context) (Diagnostics, error) {
 		UserConfigured: c.tokens.User != "",
 		ThreadCoverage: "partial",
 	}
-	if c.bot == nil {
-		return diag, nil
+	workspaceID := ""
+	if c.bot != nil {
+		resp, err := c.authTest(ctx, c.bot)
+		if err != nil {
+			return diag, err
+		}
+		diag.BotAuthTeamID = resp.TeamID
+		diag.BotAuthTeam = resp.Team
+		diag.AppTailAvailable = c.tokens.App != ""
+		workspaceID = resp.TeamID
 	}
-
-	resp, err := c.authTest(ctx, c.bot)
-	if err != nil {
-		return diag, err
-	}
-	diag.BotAuthTeamID = resp.TeamID
-	diag.BotAuthTeam = resp.Team
-	diag.AppTailAvailable = c.tokens.App != ""
 
 	if c.user != nil {
-		if _, err := c.authTest(ctx, c.user); err == nil {
+		resp, err := c.authTest(ctx, c.user)
+		if err == nil {
 			diag.UserAuthAvailable = true
+			diag.UserAuthTeamID = resp.TeamID
+			diag.UserAuthTeam = resp.Team
+			diag.UserScopes = oauthScopes(resp.Header)
+			if scopeErr := validateUserOnlyScopeSet(resp, c.includeDMs); scopeErr == nil {
+				diag.UserReadOnly = true
+			} else {
+				diag.UserScopeError = scopeErr.Error()
+			}
 			diag.ThreadCoverage = "full"
+			if workspaceID == "" {
+				workspaceID = resp.TeamID
+			}
 			if c.includeDMs {
 				diag.DMsIncluded = true
-				diag.DMsMissingScope = c.dmMissingScope(ctx, resp.TeamID)
+				diag.DMsMissingScope = c.dmMissingScope(ctx, workspaceID)
 			}
 		} else {
 			diag.UserAuthError = authErrorReason(err)
@@ -282,23 +299,7 @@ func (c *Client) Sync(ctx context.Context, st *store.Store, opts SyncOptions) er
 		}
 	}
 
-	threadCoverage := "partial"
-	if userRepliesAvailable && !threadRepliesSkipped.Skipped() {
-		threadSkipPrefix := workspaceID + "|"
-		if opts.Full && len(opts.Channels) == 0 {
-			if err := st.DeleteSyncStateByTypePrefix(ctx, SourceUser, "thread_skip", threadSkipPrefix); err != nil {
-				return err
-			}
-		}
-		hasThreadSkips, err := st.HasSyncStateType(ctx, SourceUser, "thread_skip")
-		if err != nil {
-			return err
-		}
-		if !hasThreadSkips {
-			threadCoverage = "full"
-		}
-	}
-	if err := st.SetSyncState(ctx, "doctor", "threads", "coverage", threadCoverage); err != nil {
+	if err := c.setThreadCoverage(ctx, st, workspaceID, opts, userRepliesAvailable, threadRepliesSkipped); err != nil {
 		return err
 	}
 	return st.SetSyncState(ctx, SourceBot, "workspace", workspaceID, now.Format(time.RFC3339))
@@ -420,12 +421,19 @@ func rawMessageFieldsPayload(raw map[string]any) any {
 }
 
 func (c *Client) fetchChannels(ctx context.Context, workspaceID string) ([]slack.Channel, error) {
+	return c.fetchChannelsWithClient(ctx, c.bot, workspaceID)
+}
+
+func (c *Client) fetchChannelsWithClient(ctx context.Context, client *slack.Client, workspaceID string) ([]slack.Channel, error) {
+	if client == nil {
+		return nil, errors.New("Slack client is required for channel discovery")
+	}
 	var (
 		cursor   string
 		channels []slack.Channel
 	)
 	for {
-		page, nextCursor, err := c.getConversations(ctx, &slack.GetConversationsParameters{
+		page, nextCursor, err := c.getConversations(ctx, client, &slack.GetConversationsParameters{
 			Cursor:          cursor,
 			ExcludeArchived: false,
 			Limit:           200,
@@ -728,13 +736,13 @@ func authenticatedWorkspaceID(auth *slack.AuthTestResponse, requested string) (s
 	return authTeamID, nil
 }
 
-func (c *Client) getConversations(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
+func (c *Client) getConversations(ctx context.Context, client *slack.Client, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 	type result struct {
 		channels   []slack.Channel
 		nextCursor string
 	}
 	res, err := retry(ctx, c.sleep, 3, func() (result, error) {
-		channels, nextCursor, err := c.bot.GetConversationsContext(ctx, params)
+		channels, nextCursor, err := client.GetConversationsContext(ctx, params)
 		return result{channels: channels, nextCursor: nextCursor}, err
 	})
 	return res.channels, res.nextCursor, err
@@ -1580,6 +1588,26 @@ func joinScopes(scopes map[string]struct{}) string {
 	}
 	sort.Strings(out)
 	return strings.Join(out, ",")
+}
+
+func (c *Client) setThreadCoverage(ctx context.Context, st *store.Store, workspaceID string, opts SyncOptions, userRepliesAvailable bool, threadRepliesSkipped *threadSkipTracker) error {
+	threadCoverage := "partial"
+	if userRepliesAvailable && !threadRepliesSkipped.Skipped() {
+		threadSkipPrefix := workspaceID + "|"
+		if opts.Full && len(opts.Channels) == 0 {
+			if err := st.DeleteSyncStateByTypePrefix(ctx, SourceUser, "thread_skip", threadSkipPrefix); err != nil {
+				return err
+			}
+		}
+		hasThreadSkips, err := st.HasSyncStateType(ctx, SourceUser, "thread_skip")
+		if err != nil {
+			return err
+		}
+		if !hasThreadSkips {
+			threadCoverage = "full"
+		}
+	}
+	return st.SetSyncState(ctx, "doctor", "threads", "coverage", threadCoverage)
 }
 
 func (c *Client) userAuthAvailable(ctx context.Context) bool {

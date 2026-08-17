@@ -20,6 +20,7 @@ V1 scope:
 - one or many workspaces in CLI sync and tail when explicitly configured
 - public channels
 - private channels
+- bot-free user-token sync limited to the authenticated user's joined conversations
 - top-level messages
 - channel threads
 - current workspace user snapshot
@@ -156,7 +157,7 @@ Purpose:
 
 Expected flags:
 
-- `--source api|bot|desktop|wiretap|mcp|connector|all|provider:<name>`
+- `--source api|bot|user|desktop|wiretap|mcp|connector|all|provider:<name>`
 - `--workspace <id>`
 - `--channels <csv>`
 - `--exclude-channels <csv>`
@@ -318,6 +319,8 @@ Credential model:
 - bot token: `xoxb-`
 - app token: `xapp-`
 - optional user token: `xoxp-`
+- `sync --source user` requires a user token, rejects a resolved bot token, verifies all reported OAuth scopes are read-only, and filters public/private channels to `is_member=true`
+- user-only required scopes are `channels:read`, `channels:history`, `groups:read`, `groups:history`, `users:read`, and, when DMs are enabled, `im:read`, `im:history`, `mpim:read`, `mpim:history`
 - each token source can be enabled or disabled independently
 - desktop source can be enabled or disabled independently
 - blank desktop path means auto-detect the supported macOS or Linux Slack path
@@ -376,6 +379,18 @@ Share config:
 13. upsert canonical rows
 14. update FTS rows and mentions
 15. write checkpoints, channel skips, and join attempts
+
+### User-only API sync
+
+1. require a configured user token and reject any resolved bot token
+2. authenticate the user and require Slack's `X-OAuth-Scopes` response metadata
+3. reject bot authentication, missing required scopes, and every scope not classified as read-only
+4. fetch public/private channels with the user token and keep only `is_member=true`
+5. fetch users, channel history, and thread replies with the user token
+6. when DMs are enabled, fetch and sync IMs and MPIMs with the user token
+7. never call `conversations.join` and ignore bot auto-join behavior
+8. normalize and store messages at user-token source rank `1`
+9. write user-source checkpoints and full/partial thread diagnostics
 
 ### External provider sync
 

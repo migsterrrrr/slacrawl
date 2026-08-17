@@ -25,15 +25,19 @@ slacrawl doctor
 slacrawl status --json
 ```
 
-Refresh:
+Refresh only after identifying the configured visibility boundary:
 
 ```bash
+# Bot-free, read-only user OAuth scopes; joined channels and the user's DMs.
+slacrawl sync --source user --latest-only
+
+# Use these only when their separate trust model is explicitly configured.
 slacrawl sync --source bot --latest-only
 slacrawl sync --source mcp --workspace T01234567
 slacrawl sync --source wiretap
 ```
 
-Use `--full` only for deliberate historical backfills. `bot` = API tokens; `mcp` = configured HTTP or stdio Slack connector; `wiretap` = Slack Desktop cache; `all` = API then desktop enrichment.
+Prefer `user` for a bot-free archive. It rejects bot credentials and non-read scopes and never joins channels. Use `--full` only for deliberate historical backfills. `bot` = API bot/user tokens; `mcp` = configured HTTP or stdio Slack connector; `wiretap` = Slack Desktop cache; `all` = bot API then desktop enrichment.
 
 ## Query Workflow
 
@@ -50,7 +54,7 @@ Common commands:
 
 ```bash
 slacrawl search --limit 20 "query"
-slacrawl messages --since 7d --limit 50
+slacrawl messages --limit 50
 slacrawl channels --json
 slacrawl users --json
 slacrawl mentions --limit 50

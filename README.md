@@ -48,6 +48,14 @@ slacrawl tui
 
 `init` writes `~/.slacrawl/config.toml`; database-backed commands use `~/.slacrawl/slacrawl.db` by default. A user token is optional for broader thread and DM coverage; an app token is only needed for live Socket Mode tailing.
 
+To mirror only the conversations visible to your existing Slack user without a bot, configure a user token with read-only scopes and run:
+
+```sh
+slacrawl sync --source user
+```
+
+User-only sync refuses configured bot credentials and non-read OAuth scopes, includes DMs and MPIMs, and filters public/private channels to `is_member=true`. See [Configuration](docs/configuration.md#user-only-read-only-api-source) for the exact scope and config requirements.
+
 Already have a Slack export? Import its ZIP or extracted directory instead of syncing from the API:
 
 ```sh
@@ -60,7 +68,8 @@ Every source feeds the same SQLite archive and search index.
 
 | Source | Command | Use it for |
 | --- | --- | --- |
-| Slack API | `slacrawl sync --source bot` | Token-backed channel history, users, threads, and incremental refreshes |
+| Slack API (bot) | `slacrawl sync --source bot` | Bot-visible channel history, users, threads, and incremental refreshes |
+| Slack API (user only) | `slacrawl sync --source user` | Joined channels and the authenticated user's DMs, without a bot identity or channel joins |
 | Slack Desktop | `slacrawl sync --source wiretap` | Read-only recovery from local macOS or Linux desktop caches |
 | MCP connector | `slacrawl sync --source mcp --workspace T01234567` | Connector-backed history without a direct Slack API integration |
 | External provider | `slacrawl sync --source provider:archive --workspace T01234567` | A trusted local JSONL adapter for another archive |
@@ -87,6 +96,8 @@ Run an incremental API refresh after the first sync:
 
 ```sh
 slacrawl sync --source bot
+# or, for a read-only user token without a bot:
+slacrawl sync --source user
 ```
 
 Use `--latest-only` to update only channels that already have local history, `tail` for Socket Mode events, or `watch` for recurring desktop-cache refreshes. Ordinary incremental sync preserves retention cutoffs; `--full`, an older explicit `--since`, desktop ingestion, or imports can deliberately restore older records.

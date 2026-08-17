@@ -85,7 +85,7 @@ func (a *App) printHelp() {
 	b.WriteString("  publish    Export a git-backed archive snapshot.\n")
 	b.WriteString("  subscribe  Configure a git-backed archive reader.\n")
 	b.WriteString("  update     Pull and import the latest git snapshot.\n")
-	b.WriteString("  sync       Run a one-shot crawl from bot/api, wiretap/desktop, or both.\n")
+	b.WriteString("  sync       Run a one-shot crawl from bot, read-only user, desktop, MCP, or provider sources.\n")
 	b.WriteString("  import     Import a Slack export ZIP or directory.\n")
 	b.WriteString("  purge      Preview or delete messages older than a cutoff.\n")
 	b.WriteString("  tail       Listen for live events through Socket Mode.\n")
@@ -109,7 +109,7 @@ func (a *App) printHelp() {
 	b.WriteString("  slacrawl digest --since 7d\n")
 	b.WriteString("  slacrawl analytics trends --weeks 4\n")
 	b.WriteString("  slacrawl subscribe --db ~/.slacrawl/slacrawl.db https://example.com/private/slacrawl-archive.git\n")
-	b.WriteString("  slacrawl sync --source bot --latest-only\n")
+	b.WriteString("  slacrawl sync --source user --latest-only\n")
 	b.WriteString("  slacrawl import ./my-export.zip --workspace T01234567\n")
 	b.WriteString("  slacrawl purge --older-than 90d\n")
 	b.WriteString("  slacrawl search incident\n")
@@ -636,8 +636,18 @@ func renderDoctorBlock(w *strings.Builder, value any) bool {
 	writeCheck(w, "fts5", truthy(report["fts_available"]), "sqlite virtual table available")
 
 	if slackAPI, ok := report["slack_api"].(map[string]any); ok {
-		writeCheck(w, "bot token", truthy(slackAPI["bot_configured"]), teamLabel(slackAPI))
-		writeCheck(w, "app tail", truthy(slackAPI["app_tail_available"]), ternary(truthy(slackAPI["app_tail_available"]), "socket mode available", "app token missing"))
+		botConfigured := truthy(slackAPI["bot_configured"])
+		userConfigured := truthy(slackAPI["user_configured"])
+		if botConfigured || !userConfigured {
+			writeCheck(w, "bot token", botConfigured, authTeamLabel(slackAPI, "bot", "bot token missing"))
+		}
+		if userConfigured {
+			userReady := truthy(slackAPI["user_auth_available"]) && truthy(slackAPI["user_read_only"])
+			writeCheck(w, "user token", userReady, userTokenLabel(slackAPI))
+		}
+		if botConfigured || truthy(slackAPI["app_configured"]) {
+			writeCheck(w, "app tail", truthy(slackAPI["app_tail_available"]), ternary(truthy(slackAPI["app_tail_available"]), "socket mode available", "bot and app tokens required"))
+		}
 		coverage := shortValue(slackAPI["thread_coverage"])
 		writeCheck(w, "thread coverage", coverage == "full", ternary(coverage == "full", "full historical replies", "partial without user auth"))
 		if truthy(slackAPI["dms_included"]) {
@@ -1285,9 +1295,9 @@ func truthy(value any) bool {
 	}
 }
 
-func teamLabel(value map[string]any) string {
-	team := shortValue(value["bot_auth_team"])
-	teamID := shortValue(value["bot_auth_team_id"])
+func authTeamLabel(value map[string]any, prefix, fallback string) string {
+	team := shortValue(value[prefix+"_auth_team"])
+	teamID := shortValue(value[prefix+"_auth_team_id"])
 	if team != "-" && teamID != "-" {
 		return team + " (" + teamID + ")"
 	}
@@ -1297,7 +1307,17 @@ func teamLabel(value map[string]any) string {
 	if teamID != "-" {
 		return teamID
 	}
-	return "bot token missing"
+	return fallback
+}
+
+func userTokenLabel(value map[string]any) string {
+	if authError := shortValue(value["user_auth_error"]); authError != "-" {
+		return authError
+	}
+	if scopeError := shortValue(value["user_scope_error"]); scopeError != "-" {
+		return scopeError
+	}
+	return authTeamLabel(value, "user", "user token missing")
 }
 
 func ternary(ok bool, a string, b string) string {

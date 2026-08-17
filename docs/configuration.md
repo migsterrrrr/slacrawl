@@ -101,7 +101,7 @@ Behavior:
 - each workspace automatically tries `SLACK_<WORKSPACE_ID>_BOT_TOKEN`, `SLACK_<WORKSPACE_ID>_APP_TOKEN`, and `SLACK_<WORKSPACE_ID>_USER_TOKEN`
 - top-level `enabled` flags are inherited, so you do not need to repeat `enabled = true` for every workspace
 - `bot_token_env`, `app_token_env`, and `user_token_env` are optional overrides when you do not want the default env naming convention
-- `sync --source bot` without `--workspace` runs against every configured `[[workspaces]]` entry
+- `sync --source bot` and `sync --source user` without `--workspace` run against every configured `[[workspaces]]` entry
 - `tail` without `--workspace` starts one live tail per configured `[[workspaces]]` entry
 - `search`, `messages`, `mentions`, `users`, and `channels` accept `--workspace` to filter the shared SQLite database
 - `users` and `channels` return 100 rows by default and accept a positive `--limit` override
@@ -112,12 +112,97 @@ Behavior:
 One config/database should represent one Slack visibility boundary: the messages visible to one bot/account/profile. Use ingestion sources to decide how that archive is populated:
 
 - `sync --source bot` is an alias for `sync --source api` and uses Slack bot/user tokens
+- `sync --source user` uses only a read-only user token and archives joined channels, DMs, and MPIMs
 - `sync --source mcp` fetches from a Slack connector exposed by the configured HTTP JSON-RPC MCP gateway
 - `sync --source provider:<name>` imports a configured external archive through a trusted local subprocess
 - `sync --source wiretap` is an alias for `sync --source desktop` and reads the local Slack Desktop cache
-- `sync --source all` runs token-backed sync first, then desktop enrichment; external providers remain explicit
+- `sync --source all` runs bot-backed API sync first, then desktop enrichment; it does not select the strict user-only source, and external providers remain explicit
 - `[share]` backs up the current DB and safely merges snapshots by default; it is not a second Slack data source
 - exact latest or historical replacement requires `update --restore`
+
+### User-only read-only API source
+
+Use `sync --source user` when you want the visibility of an existing Slack user without creating a bot identity or adding an app to channels. This source:
+
+- requires `SLACK_USER_TOKEN` and refuses to run when a bot token is resolved
+- authenticates as a user, not a bot
+- checks Slack's reported `X-OAuth-Scopes` and refuses every scope that is not read-only
+- filters public and private channels to Slack's `is_member=true`
+- includes IMs and MPIMs when `sync.include_dms` is enabled (the default when a user token exists)
+- uses the user token for channel history, thread replies, users, DMs, and MPIMs
+- never attempts `conversations.join`; `--auto-join` does not apply
+- does not support Socket Mode `tail`, which remains a bot/app-token feature
+
+Create a new internal Slack app with only these **User Token Scopes**:
+
+```text
+channels:read
+channels:history
+groups:read
+groups:history
+im:read
+im:history
+mpim:read
+mpim:history
+users:read
+```
+
+A minimal Slack app manifest for this source is:
+
+```yaml
+display_information:
+  name: Slacrawl Read Only
+oauth_config:
+  scopes:
+    user:
+      - channels:history
+      - channels:read
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - mpim:history
+      - mpim:read
+      - users:read
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
+```
+
+Create an internal app from that manifest, install it to the workspace as your existing user, and place the resulting **User OAuth Token** in `SLACK_USER_TOKEN`. No bot scope or bot user is needed. Workspace policy may require administrator approval. Never put the token in TOML, shell history, source control, screenshots, or agent prompts.
+
+Slack OAuth grants are additive. If an existing token has ever received a write or management scope, revoke it and authorize a fresh read-only grant rather than reusing it. The source fails closed when Slack omits scope metadata, when any required scope is missing, or when scopes such as `chat:write` are present.
+
+A minimal user-only profile is:
+
+```toml
+[slack.bot]
+enabled = false
+token_env = "SLACK_BOT_TOKEN"
+
+[slack.app]
+enabled = false
+token_env = "SLACK_APP_TOKEN"
+
+[slack.user]
+enabled = true
+token_env = "SLACK_USER_TOKEN"
+
+[slack.desktop]
+enabled = false
+path = ""
+
+[slack.mcp]
+enabled = false
+
+[sync]
+include_dms = true
+auto_join = false
+file_media = false
+```
+
+Then run `slacrawl doctor` followed by `slacrawl sync --source user`. Local SQLite writes still occur because synchronization builds an archive; "read-only" here means the Slack credential cannot modify Slack.
 
 Keep company and personal Slack archives in separate configs, DBs, and git remotes:
 
@@ -385,7 +470,7 @@ token_env = "SLACK_APP_TOKEN"
 
 ### User token
 
-The user token is optional, but it upgrades historical thread coverage for public and private channels.
+The user token is optional for bot-backed sync, where it upgrades historical thread coverage for public and private channels. It is the only Slack credential used by `sync --source user`; see [User-only read-only API source](#user-only-read-only-api-source) for its strict scope contract.
 
 ```toml
 [slack.user]
@@ -486,6 +571,36 @@ token_env = "SLACK_USER_TOKEN"
 enabled = true
 path = ""
 ```
+
+### User-only API sync without a bot
+
+```toml
+[slack.bot]
+enabled = false
+token_env = "SLACK_BOT_TOKEN"
+
+[slack.app]
+enabled = false
+token_env = "SLACK_APP_TOKEN"
+
+[slack.user]
+enabled = true
+token_env = "SLACK_USER_TOKEN"
+
+[slack.desktop]
+enabled = false
+path = ""
+
+[slack.mcp]
+enabled = false
+
+[sync]
+include_dms = true
+auto_join = false
+file_media = false
+```
+
+Run this profile with `slacrawl sync --source user`.
 
 ### API sync without live tail
 
