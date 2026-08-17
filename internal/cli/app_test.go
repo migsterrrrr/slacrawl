@@ -298,6 +298,19 @@ func TestDoctorIncludesOperationalSyncState(t *testing.T) {
 	require.Equal(t, "bot", profile["mode"])
 }
 
+func TestArchiveProfileUsesUserModeForUserOnlyConfig(t *testing.T) {
+	cfg := config.Default()
+	cfg.Slack.Bot.Enabled = false
+	cfg.Slack.User.Enabled = true
+
+	profile := archiveProfileFromConfig(cfg)
+	require.Equal(t, "user", profile.Sources[0].Name)
+	require.Equal(t, "Slack API user visibility", profile.Sources[0].Label)
+
+	profile.Sources[0].Messages = 1
+	require.Equal(t, "user", archiveMode(profile.Sources))
+}
+
 func TestSyncAcceptsWiretapSourceAlias(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "config.toml")

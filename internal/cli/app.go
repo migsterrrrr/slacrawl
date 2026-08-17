@@ -2249,10 +2249,16 @@ type shareResponse struct {
 }
 
 func archiveProfileFromConfig(cfg config.Config) archiveProfileResponse {
+	apiName := "bot"
+	apiLabel := "Slack API bot/user visibility"
+	if cfg.Slack.User.Enabled && !cfg.Slack.Bot.Enabled {
+		apiName = "user"
+		apiLabel = "Slack API user visibility"
+	}
 	sources := []sourceResponse{
 		{
-			Name:       "bot",
-			Label:      "Slack API bot/user visibility",
+			Name:       apiName,
+			Label:      apiLabel,
 			Enabled:    cfg.Slack.Bot.Enabled || cfg.Slack.User.Enabled,
 			Configured: hasAPITokens(cfg),
 		},
@@ -2295,10 +2301,11 @@ func (a *App) buildArchiveProfile(ctx context.Context, cfg config.Config, st *st
 		index[sources[i].Name] = i
 	}
 
+	apiSourceName := sources[0].Name
 	syncRows, err := st.QueryReadOnly(ctx, `
 select
   case
-    when source_name in ('api-bot', 'api-user', 'tail') then 'bot'
+    when source_name in ('api-bot', 'api-user', 'tail') then 'api'
     when source_name = 'desktop' or source_name like 'desktop-%' then 'wiretap'
     when source_name = 'share' then 'backup'
     else source_name
@@ -2314,6 +2321,9 @@ group by source
 	}
 	for _, row := range syncRows {
 		source := fmt.Sprint(row["source"])
+		if source == "api" {
+			source = apiSourceName
+		}
 		i, ok := index[source]
 		if !ok {
 			continue
@@ -2325,7 +2335,7 @@ group by source
 	messageRows, err := st.QueryReadOnly(ctx, `
 select
   case
-    when source_name in ('api-bot', 'api-user') then 'bot'
+    when source_name in ('api-bot', 'api-user') then 'api'
     when source_name = 'desktop' or source_name like 'desktop-%' then 'wiretap'
     when source_name = 'slack-export' then 'import'
     else source_name
@@ -2340,6 +2350,9 @@ group by source
 	importMessages := int64(0)
 	for _, row := range messageRows {
 		source := fmt.Sprint(row["source"])
+		if source == "api" {
+			source = apiSourceName
+		}
 		if source == "import" {
 			importMessages += int64Value(row["messages"])
 			continue
@@ -2381,12 +2394,14 @@ func hasAPITokens(cfg config.Config) bool {
 }
 
 func archiveMode(sources []sourceResponse) string {
-	var bot, mcp, wiretap, backup, imported bool
+	var bot, user, mcp, wiretap, backup, imported bool
 	for _, source := range sources {
 		hasData := source.Messages > 0 || source.LastSeenAt != "" || source.SyncEntries > 0
 		switch source.Name {
 		case "bot":
 			bot = hasData
+		case "user":
+			user = hasData
 		case "wiretap":
 			wiretap = hasData
 		case "mcp":
@@ -2398,10 +2413,12 @@ func archiveMode(sources []sourceResponse) string {
 		}
 	}
 	switch {
-	case boolCount(bot, mcp, wiretap, backup, imported) > 1:
+	case boolCount(bot, user, mcp, wiretap, backup, imported) > 1:
 		return "hybrid"
 	case bot:
 		return "bot"
+	case user:
+		return "user"
 	case mcp:
 		return "mcp"
 	case wiretap:
